@@ -352,19 +352,44 @@ def corr_bar(d):
     )
 
 
+def _short(n):
+    """Shorten one-hot column names so heatmap labels stay readable."""
+    return (
+        n.replace("InternetService_", "Internet: ")
+        .replace("Contract_", "Contract: ")
+        .replace("TechSupport_", "TechSupport: ")
+        .replace("MultipleLines_", "Lines: ")
+        .replace("OnlineSecurity_", "Security: ")
+        .replace("TenureGroup_", "Tenure ")
+        .replace("AvgMonthlySpend", "Avg spend")
+    )
+
+
 def corr_heatmap(d):
     if d["Churn"].nunique() < 2:
         return None
     num = d.select_dtypes("number")
     num = num.loc[:, num.std() > 0]
+    # drop redundant one-hot columns that just duplicate another feature
+    num = num.drop(
+        columns=[c for c in num.columns if "No internet service" in c or "No phone service" in c]
+    )
+    num = num.rename(columns=_short)
     corr = num.corr()
-    top = corr["Churn"].drop("Churn").abs().sort_values(ascending=False).head(9).index.tolist() + ["Churn"]
+    top = corr["Churn"].drop("Churn").abs().sort_values(ascending=False).head(8).index.tolist() + ["Churn"]
     m = corr.loc[top, top]
     m.index.name = "Feature"
     m = m.reset_index().melt("Feature", var_name="Feature2", value_name="Correlation")
+
+    # lower triangle only: each pair shown once
+    pos = {n: i for i, n in enumerate(top)}
+    m = m[m["Feature2"].map(pos) <= m["Feature"].map(pos)]
+
     base = alt.Chart(m).encode(
-        x=alt.X("Feature2:N", title=None, sort=top, axis=alt.Axis(labelAngle=-40)),
-        y=alt.Y("Feature:N", title=None, sort=top),
+        x=alt.X("Feature2:N", title=None, sort=top,
+                axis=alt.Axis(labelAngle=-45, labelLimit=160, labelFontSize=12)),
+        y=alt.Y("Feature:N", title=None, sort=top,
+                axis=alt.Axis(labelLimit=160, labelFontSize=12)),
     )
     rect = base.mark_rect(cornerRadius=4, stroke=BG, strokeWidth=2).encode(
         color=alt.Color(
@@ -374,11 +399,15 @@ def corr_heatmap(d):
         ),
         tooltip=["Feature", "Feature2", alt.Tooltip("Correlation:Q", format=".2f")],
     )
-    text = base.mark_text(fontSize=10).encode(
-        text=alt.Text("Correlation:Q", format=".2f"),
-        color=alt.condition("abs(datum.Correlation) > 0.45", alt.value("#ffffff"), alt.value(MUTED)),
+    text = (
+        base.mark_text(fontSize=12)
+        .transform_filter("abs(datum.Correlation) >= 0.1")  # hide near-zero noise
+        .encode(
+            text=alt.Text("Correlation:Q", format=".2f"),
+            color=alt.condition("abs(datum.Correlation) > 0.45", alt.value("#ffffff"), alt.value(TEXT)),
+        )
     )
-    return (rect + text).properties(title="Correlation heatmap", height=380)
+    return (rect + text).properties(title="Correlation heatmap", height=420)
 
 
 # ---------------- Sidebar ----------------
@@ -540,7 +569,7 @@ elif page == "Visual Insights":
             show_chart(charges_box(fdf))
         with d_:
             show_chart(rate_bar(fdf, "ContractType", "Churn rate by contract type"))
-        e, f = st.columns(2)
+        e, f = st.columns([1, 1.3])
         with e:
             show_chart(corr_bar(fdf))
         with f:
